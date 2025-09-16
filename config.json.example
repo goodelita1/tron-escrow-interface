@@ -1,0 +1,56 @@
+{
+  "bot": {
+    "token": "",
+    "web_app_url": "https://goodelita1.github.io/tron-escrow-interface/tronlink_interface.html"
+  },
+  "settings": {
+    "default_network": "shasta",
+    "debug": true,
+    "max_transactions": 100
+  },
+  "networks": {
+    "shasta": {
+      "name": "Shasta (Testnet)",
+      "node_url": "https://api.shasta.trongrid.io",
+      "explorer_url": "https://shasta.tronscan.org",
+      "escrow_contract": "YOUR_ESCROW_CONTRACT_ADDRESS",
+      "usdt_contract": "TKZDdu947FtxWHLRKUXnhNZ6bar9RrZ7Wv",
+      "arbitrator_address": "YOUR_ARBITRATOR_ADDRESS"
+    },
+    "mainnet": {
+      "name": "TRON Mainnet",
+      "node_url": "https://api.trongrid.io",
+      "explorer_url": "https://tronscan.org",
+      "escrow_contract": "",
+      "usdt_contract": "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t",
+      "arbitrator_address": ""
+    }
+  },
+  "api_config": {
+    "binance": {
+      "timeout": 30,
+      "retry_count": 3
+    },
+    "coingecko": {
+      "timeout": 30,
+      "retry_count": 3
+    },
+    "bybit": {
+      "timeout": 30,
+      "retry_count": 3
+    },
+    "yfinance": {
+      "timeout": 30,
+      "retry_count": 3
+    },
+    "fear_greed": {
+      "timeout": 30,
+      "retry_count": 3
+    }
+  },
+  "database": {
+    "path": "unified_escrow.db",
+    "backup_enabled": true,
+    "backup_interval_hours": 24
+  }
+}

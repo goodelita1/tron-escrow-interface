@@ -406,9 +406,15 @@
                     console.log('🔍 DEBUG: - Recipient length:', transactionData.parameters.recipient ? transactionData.parameters.recipient.length : 'undefined');
                     console.log('🔍 DEBUG: - Is recipient empty?:', !transactionData.parameters.recipient || transactionData.parameters.recipient.trim() === '');
                     
+                    // Convert recipient address to hex format for TronWeb
+                    console.log('🔍 DEBUG: Converting recipient address to hex...');
+                    const recipientHex = tronWeb.address.toHex(transactionData.parameters.recipient);
+                    console.log('🔍 DEBUG: - Base58 address:', transactionData.parameters.recipient);
+                    console.log('🔍 DEBUG: - Hex address:', recipientHex);
+                    
                     // Create transaction with timeout protection
                     const createTxPromise = contract.createTransaction(
-                        transactionData.parameters.recipient,
+                        recipientHex,  // Use hex format
                         transactionData.parameters.amount,
                         transactionData.parameters.deadline
                     ).send({

@@ -1,7 +1,7 @@
 {
   "bot": {
     "token": "",
-    "web_app_url": "https://goodelita1.github.io/tron-escrow-interface/tronlink_interface.html"
+    "web_app_url": "https://goodelita1.github.io/tron-escrow-interface/docs/tronlink_interface.html"
   },
   "settings": {
     "default_network": "shasta",

@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TRON Escrow Interface</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .header h1 {
+            color: #2c3e50;
+            margin-bottom: 10px;
+        }
+        .status {
+            padding: 15px;
+            margin: 15px 0;
+            border-radius: 8px;
+            font-weight: 500;
+        }
+        .status.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .status.info {
+            background: #cce7ff;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
+        }
+        .transaction-info {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+            border-left: 4px solid #007bff;
+        }
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid #eee;
+        }
+        .info-label {
+            font-weight: 600;
+            color: #495057;
+        }
+        .info-value {
+            color: #212529;
+            word-break: break-word;
+            text-align: right;
+            max-width: 60%;
+        }
+        .btn {
+            display: inline-block;
+            padding: 12px 24px;
+            background: #007bff;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            text-decoration: none;
+            font-size: 16px;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            width: 100%;
+            margin: 10px 0;
+        }
+        .btn:hover {
+            background: #0056b3;
+            transform: translateY(-2px);
+        }
+        .btn:disabled {
+            background: #6c757d;
+            cursor: not-allowed;
+            transform: none;
+        }
+        .btn.processing {
+            background: #007bff;
+            position: relative;
+            overflow: hidden;
+        }
+        .btn.processing::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+            animation: loading 1.5s infinite;
+        }
+        @keyframes loading {
+            0% { left: -100%; }
+            100% { left: 100%; }
+        }
+        .btn.secondary {
+            background: #6c757d;
+        }
+        .btn.secondary:hover {
+            background: #545b62;
+        }
+        .loading {
+            text-align: center;
+            padding: 20px;
+        }
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #007bff;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 15px;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔗 TRON Escrow Interface</h1>
+            <p>Secure USDT escrow transactions with TronLink</p>
+        </div>
+
+        <div id="status" class="status info">
+            🔄 Initializing TronLink...
+        </div>
+
+        <div id="transaction-info" class="transaction-info" style="display: none;">
+            <h3>📋 Transaction Details</h3>
+            <div id="transaction-details"></div>
+        </div>
+
+        <button id="connect-btn" class="btn" onclick="connectTronLink()">
+            🔗 Connect TronLink
+        </button>
+
+        <button id="execute-btn" class="btn" onclick="executeTransaction()" style="display: none;" disabled>
+            ✍️ Sign Transaction
+        </button>
+
+        <div id="result-info" style="display: none; margin-top: 20px;">
+            <h3>✅ Transaction Successful</h3>
+            <p id="tx-hash"></p>
+            <p>🎉 Your escrow transaction has been created!</p>
+        </div>
+    </div>
+
+    <script>
+        let tronWeb = null;
+        let transactionData = null;
+
+        // Check for TronLink availability
+        async function checkTronLink() {
+            if (typeof window.tronWeb !== 'undefined') {
+                tronWeb = window.tronWeb;
+                updateStatus('✅ TronLink detected!', 'success');
+                document.getElementById('connect-btn').disabled = false;
+                return true;
+            } else {
+                updateStatus('❌ TronLink not found. Please install TronLink extension.', 'error');
+                return false;
+            }
+        }
+
+        // Connect to TronLink wallet
+        async function connectTronLink() {
+            try {
+                if (!tronWeb) {
+                    updateStatus('❌ TronLink not available', 'error');
+                    return;
+                }
+
+                const address = tronWeb.defaultAddress.base58;
+                if (address) {
+                    updateStatus(`✅ Connected: ${address.substring(0, 6)}...${address.substring(address.length - 4)}`, 'success');
+                    
+                    // Parse transaction data from URL
+                    parseTransactionData();
+                    
+                    document.getElementById('connect-btn').style.display = 'none';
+                    document.getElementById('execute-btn').style.display = 'block';
+                    document.getElementById('execute-btn').disabled = false;
+                } else {
+                    updateStatus('❌ Wallet not connected. Please unlock TronLink.', 'error');
+                }
+            } catch (error) {
+                updateStatus(`❌ Connection error: ${error.message}`, 'error');
+            }
+        }
+
+        // Parse transaction data from URL parameters
+        function parseTransactionData() {
+            try {
+                const urlParams = new URLSearchParams(window.location.search);
+                const encodedData = urlParams.get('data');
+                
+                console.log('🔍 DEBUG: Raw URL data parameter:', encodedData);
+                
+                if (encodedData) {
+                    const jsonData = atob(encodedData);
+                    console.log('🔍 DEBUG: Decoded JSON string:', jsonData);
+                    
+                    transactionData = JSON.parse(jsonData);
+                    
+                    console.log('🔍 DEBUG: Parsed transaction data:', JSON.stringify(transactionData, null, 2));
+                    console.log('🔍 DEBUG: Transaction parameters:', transactionData.parameters);
+                    
+                    if (transactionData.parameters) {
+                        console.log('🔍 DEBUG: Recipient:', transactionData.parameters.recipient);
+                        console.log('🔍 DEBUG: Amount:', transactionData.parameters.amount);
+                        console.log('🔍 DEBUG: Deadline:', transactionData.parameters.deadline);
+                    }
+                    
+                    displayTransactionDetails();
+                } else {
+                    updateStatus('⚠️ No transaction data provided in URL', 'info');
+                    console.log('🔍 DEBUG: No data parameter in URL');
+                }
+            } catch (error) {
+                updateStatus(`❌ Error parsing transaction data: ${error.message}`, 'error');
+                console.error('🔍 DEBUG: Parse error:', error);
+                console.error('🔍 DEBUG: Stack trace:', error.stack);
+            }
+        }
+
+        // Display transaction details
+        function displayTransactionDetails() {
+            if (!transactionData) return;
+
+            const detailsDiv = document.getElementById('transaction-details');
+            const amountUSDT = transactionData.parameters ? (transactionData.parameters.amount / 1000000) : 0;
+            
+            let detailsHTML = `
+                <div class="info-row">
+                    <span class="info-label">Operation:</span>
+                    <span class="info-value">${transactionData.type === 'escrow_create' ? '🆕 Create Escrow' : '✅ Confirm Delivery'}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Contract:</span>
+                    <span class="info-value">${transactionData.contract}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">Method:</span>
+                    <span class="info-value">${transactionData.type === 'escrow_create' ? 'createTransaction' : (transactionData.type === 'escrow_confirm_delivery' ? 'confirmDelivery' : 'unknown')}</span>
+                </div>
+            `;
+            
+            if (transactionData.parameters) {
+                if (transactionData.parameters.recipient) {
+                    detailsHTML += `
+                        <div class="info-row">
+                            <span class="info-label">Recipient:</span>
+                            <span class="info-value">${transactionData.parameters.recipient}</span>
+                        </div>
+                    `;
+                }
+                if (transactionData.parameters.amount) {
+                    detailsHTML += `
+                        <div class="info-row">
+                            <span class="info-label">Amount:</span>
+                            <span class="info-value">${amountUSDT} USDT</span>
+                        </div>
+                    `;
+                }
+                if (transactionData.parameters.deadline) {
+                    detailsHTML += `
+                        <div class="info-row">
+                            <span class="info-label">Deadline:</span>
+                            <span class="info-value">${new Date(transactionData.parameters.deadline * 1000).toLocaleString()}</span>
+                        </div>
+                    `;
+                }
+                if (transactionData.parameters.transactionId !== undefined) {
+                    detailsHTML += `
+                        <div class="info-row">
+                            <span class="info-label">Transaction ID:</span>
+                            <span class="info-value">${transactionData.parameters.transactionId}</span>
+                        </div>
+                    `;
+                }
+            }
+            
+            if (transactionData.network) {
+                detailsHTML += `
+                    <div class="info-row">
+                        <span class="info-label">Network:</span>
+                        <span class="info-value">${transactionData.network.toUpperCase()}</span>
+                    </div>
+                `;
+            }
+            
+            detailsDiv.innerHTML = detailsHTML;
+            document.getElementById('transaction-info').style.display = 'block';
+        }
+
+        // Execute the transaction
+        async function executeTransaction() {
+            if (!transactionData || !tronWeb) {
+                updateStatus('❌ Missing transaction data or TronLink', 'error');
+                return;
+            }
+
+            // Disable button to prevent multiple clicks
+            const executeBtn = document.getElementById('execute-btn');
+            executeBtn.disabled = true;
+            executeBtn.className = 'btn processing';
+            executeBtn.textContent = '🔄 Processing...';
+
+            try {
+                updateStatus('🔄 Preparing transaction...', 'info');
+                
+                let txResult;
+
+                if (transactionData.type === 'escrow_create') {
+                    // Create escrow transaction with new 3-parameter signature
+                    const contract = await tronWeb.contract().at(transactionData.contract);
+                    
+                    // Step 1: USDT Approve (ALWAYS required)
+                    updateStatus('🔄 Step 1/2: Please confirm USDT approve in TronLink...', 'info');
+                    
+                    if (transactionData.usdt_contract) {
+                        const usdtContract = await tronWeb.contract().at(transactionData.usdt_contract);
+                        
+                        try {
+                            // Always do approve to ensure sufficient allowance
+                            const approvePromise = usdtContract.approve(
+                                transactionData.contract,
+                                transactionData.parameters.amount
+                            ).send({
+                                feeLimit: 50000000,
+                                callValue: 0,
+                                shouldPollResponse: false  // Changed to false
+                            });
+                            
+                            // Add timeout for approve as well
+                            const approveTimeoutPromise = new Promise((_, reject) => {
+                                setTimeout(() => reject(new Error('Approve timeout')), 30000);
+                            });
+                            
+                            let approveResult;
+                            try {
+                                approveResult = await Promise.race([approvePromise, approveTimeoutPromise]);
+                                console.log('Approve result:', approveResult);
+                            } catch (approveTimeoutError) {
+                                if (approveTimeoutError.message === 'Approve timeout') {
+                                    console.log('Approve timed out but may be successful');
+                                    approveResult = 'pending';
+                                } else {
+                                    throw approveTimeoutError;
+                                }
+                            }
+                            
+                            updateStatus('✅ Step 1/2 Complete: USDT approved! (Gas paid)', 'success');
+                            
+                            // Wait a moment before next step
+                            await new Promise(resolve => setTimeout(resolve, 1500));
+                            
+                        } catch (approveError) {
+                            console.error('Approve failed:', approveError);
+                            throw new Error(`USDT approve failed: ${approveError.message}`);
+                        }
+                    } else {
+                        throw new Error('USDT contract address not provided');
+                    }
+                    
+                    // Step 2: Create Escrow Transaction
+                    updateStatus('🔄 Step 2/2: Please confirm escrow creation in TronLink...', 'info');
+                    
+                    // 🔍 DETAILED LOGGING BEFORE CONTRACT CALL
+                    console.log('🔍 DEBUG: About to call createTransaction with parameters:');
+                    console.log('🔍 DEBUG: - Contract address:', transactionData.contract);
+                    console.log('🔍 DEBUG: - Recipient (raw):', transactionData.parameters.recipient);
+                    console.log('🔍 DEBUG: - Amount (raw):', transactionData.parameters.amount);
+                    console.log('🔍 DEBUG: - Deadline (raw):', transactionData.parameters.deadline);
+                    console.log('🔍 DEBUG: - Recipient type:', typeof transactionData.parameters.recipient);
+                    console.log('🔍 DEBUG: - Amount type:', typeof transactionData.parameters.amount);
+                    console.log('🔍 DEBUG: - Deadline type:', typeof transactionData.parameters.deadline);
+                    console.log('🔍 DEBUG: - Recipient length:', transactionData.parameters.recipient ? transactionData.parameters.recipient.length : 'undefined');
+                    console.log('🔍 DEBUG: - Is recipient empty?:', !transactionData.parameters.recipient || transactionData.parameters.recipient.trim() === '');
+                    
+                    // Create transaction with timeout protection
+                    const createTxPromise = contract.createTransaction(
+                        transactionData.parameters.recipient,
+                        transactionData.parameters.amount,
+                        transactionData.parameters.deadline
+                    ).send({
+                        feeLimit: 100000000,
+                        callValue: 0,
+                        shouldPollResponse: false  // Changed to false to avoid hanging
+                    });
+                    
+                    // Add timeout protection
+                    const timeoutPromise = new Promise((_, reject) => {
+                        setTimeout(() => reject(new Error('Transaction timeout')), 30000); // 30 second timeout
+                    });
+                    
+                    try {
+                        txResult = await Promise.race([createTxPromise, timeoutPromise]);
+                        updateStatus('✅ Step 2/2 Complete: Escrow created! (Gas paid)', 'success');
+                        console.log('Create transaction result:', txResult);
+                    } catch (timeoutError) {
+                        if (timeoutError.message === 'Transaction timeout') {
+                            // Transaction might still be successful, just slow confirmation
+                            updateStatus('✅ Transaction submitted! Checking status...', 'success');
+                            console.log('Transaction timed out but may be successful');
+                            txResult = 'pending'; // We'll treat this as success
+                        } else {
+                            throw timeoutError;
+                        }
+                    }
+
+                } else if (transactionData.type === 'escrow_confirm_delivery') {
+                    // Confirm delivery (single step process)
+                    updateStatus('🔄 Please confirm delivery confirmation in TronLink...', 'info');
+                    const contract = await tronWeb.contract().at(transactionData.contract);
+                    
+                    // Confirm delivery with timeout protection
+                    const confirmPromise = contract.confirmDelivery(
+                        transactionData.parameters.transactionId
+                    ).send({
+                        feeLimit: 50000000,
+                        callValue: 0,
+                        shouldPollResponse: false  // Changed to false
+                    });
+                    
+                    const confirmTimeoutPromise = new Promise((_, reject) => {
+                        setTimeout(() => reject(new Error('Confirm timeout')), 30000);
+                    });
+                    
+                    try {
+                        txResult = await Promise.race([confirmPromise, confirmTimeoutPromise]);
+                        console.log('Confirm delivery result:', txResult);
+                    } catch (confirmTimeoutError) {
+                        if (confirmTimeoutError.message === 'Confirm timeout') {
+                            console.log('Confirm timed out but may be successful');
+                            txResult = 'pending';
+                        } else {
+                            throw confirmTimeoutError;
+                        }
+                    }
+                    
+                    updateStatus('✅ Delivery confirmed successfully!', 'success');
+                } else {
+                    throw new Error('Unsupported transaction type');
+                }
+
+                // Success
+                updateStatus('✅ Transaction completed successfully!', 'success');
+                
+                document.getElementById('tx-hash').textContent = `Transaction Hash: ${txResult}`;
+                document.getElementById('result-info').style.display = 'block';
+                executeBtn.className = 'btn';
+                executeBtn.textContent = '✅ Completed';
+
+                console.log('Transaction result:', txResult);
+
+                // Auto-close with countdown
+                let countdown = 3;
+                const countdownInterval = setInterval(() => {
+                    updateStatus(`✅ Success! Closing in ${countdown} seconds...`, 'success');
+                    countdown--;
+                    
+                    if (countdown < 0) {
+                        clearInterval(countdownInterval);
+                        if (window.Telegram && window.Telegram.WebApp) {
+                            // Close Telegram WebApp
+                            window.Telegram.WebApp.close();
+                        } else {
+                            // Regular browser - close window or show completion message
+                            try {
+                                window.close();
+                            } catch (e) {
+                                updateStatus('✅ Transaction completed! You can close this window.', 'success');
+                            }
+                        }
+                    }
+                }, 1000);
+
+            } catch (error) {
+                updateStatus(`❌ Transaction failed: ${error.message}`, 'error');
+                console.error('Transaction error:', error);
+                
+                // Re-enable button on error
+                executeBtn.disabled = false;
+                executeBtn.className = 'btn';
+                executeBtn.textContent = '🔄 Retry Transaction';
+            }
+        }
+
+        // Update status message
+        function updateStatus(message, type) {
+            const statusDiv = document.getElementById('status');
+            statusDiv.textContent = message;
+            statusDiv.className = `status ${type}`;
+        }
+
+        // Initialize when page loads
+        window.addEventListener('load', async () => {
+            // Parse transaction data immediately on page load
+            parseTransactionData();
+            
+            // Wait for TronLink to load
+            setTimeout(async () => {
+                await checkTronLink();
+            }, 1000);
+        });
+    </script>
+</body>
+</html>

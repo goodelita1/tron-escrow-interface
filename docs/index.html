@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TRON Escrow System</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .header h1 {
+            color: #2c3e50;
+            margin-bottom: 10px;
+        }
+        .links {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            margin-top: 30px;
+        }
+        .link {
+            display: block;
+            padding: 15px;
+            background: #007bff;
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+            text-align: center;
+            transition: all 0.3s ease;
+        }
+        .link:hover {
+            background: #0056b3;
+            transform: translateY(-2px);
+        }
+        .description {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 20px 0;
+            border-left: 4px solid #007bff;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔗 TRON Escrow System</h1>
+            <p>Secure USDT escrow transactions on TRON blockchain</p>
+        </div>
+
+        <div class="description">
+            <h3>📋 System Components</h3>
+            <p><strong>🤖 Telegram Bot:</strong> User-friendly interface for creating escrow transactions</p>
+            <p><strong>🔗 TronLink Interface:</strong> Web interface for signing transactions with TronLink wallet</p>
+            <p><strong>📜 Smart Contracts:</strong> Solidity contracts handling USDT escrow logic</p>
+        </div>
+
+        <div class="links">
+            <a href="tronlink_interface.html" class="link">
+                💳 TronLink Interface
+            </a>
+            <a href="https://github.com/goodelita1/tron-escrow-interface" class="link">
+                📁 GitHub Repository
+            </a>
+        </div>
+
+        <div class="description">
+            <h3>🔧 How to Use</h3>
+            <ol>
+                <li>Start a conversation with the Telegram bot</li>
+                <li>Create a new escrow transaction</li>
+                <li>Enter recipient address and amount</li>
+                <li>Click the TronLink button to open this interface</li>
+                <li>Connect your TronLink wallet and confirm the transaction</li>
+            </ol>
+        </div>
+
+        <div class="description">
+            <h3>🔒 Security Features</h3>
+            <ul>
+                <li>✅ No private keys are ever stored or transmitted</li>
+                <li>✅ All transaction signing happens in TronLink wallet</li>
+                <li>✅ Smart contract enforces escrow rules automatically</li>
+                <li>✅ Open source code for full transparency</li>
+            </ul>
+        </div>
+    </div>
+</body>
+</html>

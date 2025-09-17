@@ -340,10 +340,14 @@
                 // 🔍 DEBUG: Log transaction type
                 console.log('🔍 DEBUG: Transaction type:', transactionData.type);
                 console.log('🔍 DEBUG: Full transaction data:', transactionData);
+                console.log('🔍 DEBUG: Type check - escrow_create:', transactionData.type === 'escrow_create');
+                console.log('🔍 DEBUG: Type check - confirm_delivery:', transactionData.type === 'confirm_delivery');
+                console.log('🔍 DEBUG: Type check - escrow_confirm_delivery:', transactionData.type === 'escrow_confirm_delivery');
                 
                 let txResult;
 
                 if (transactionData.type === 'escrow_create') {
+                    console.log('🔍 DEBUG: Entering escrow_create branch');
                     // Create escrow transaction with new 3-parameter signature
                     const contract = await tronWeb.contract().at(transactionData.contract);
                     
@@ -448,6 +452,7 @@
                     }
 
                 } else if (transactionData.type === 'confirm_delivery' || transactionData.type === 'escrow_confirm_delivery') {
+                    console.log('🔍 DEBUG: Entering confirm_delivery branch');
                     // Confirm delivery (single step process)
                     updateStatus('🔄 Please confirm delivery confirmation in TronLink...', 'info');
                     const contract = await tronWeb.contract().at(transactionData.contract);
@@ -479,6 +484,8 @@
                     
                     updateStatus('✅ Delivery confirmed successfully!', 'success');
                 } else {
+                    console.log('🔍 DEBUG: Entering else branch - unsupported type');
+                    console.log('🔍 DEBUG: Transaction type value:', JSON.stringify(transactionData.type));
                     throw new Error(`Unsupported transaction type: ${transactionData.type}`);
                 }
 
@@ -544,5 +551,5 @@
         });
     </script>
 </body>
-<!-- Cache buster: Updated 2025-09-17 08:27 -->
+<!-- Cache buster: Updated 2025-09-17 08:31 -->
 </html>

@@ -62,9 +62,10 @@ class Config:
         self.USDT_CONTRACT = network_config.get('usdt_contract', "TKZDdu947FtxWHLRKUXnhNZ6bar9RrZ7Wv")
         self.ARBITRATOR_ADDRESS = network_config.get('arbitrator_address', "TBohEWSnePeDFd7k3wn3gKdcP8eTv1vzv2")
         
-        # Файлы для хранения данных
-        self.USERS_DATA_FILE = "users_data.json"
-        self.PENDING_TRANSACTIONS_FILE = "pending_transactions.json"
+        # Файлы для хранения данных (в папке bots)
+        bots_dir = os.path.dirname(__file__)
+        self.USERS_DATA_FILE = os.path.join(bots_dir, "users_data.json")
+        self.PENDING_TRANSACTIONS_FILE = os.path.join(bots_dir, "pending_transactions.json")
         
         # URL для TronLink интеграции
         self.WEB_APP_URL = self.config.get('bot', {}).get('web_app_url', "https://goodelita1.github.io/tron-escrow-interface/tronlink_interface.html")
@@ -166,10 +167,21 @@ class UnifiedCryptoBot:
                         recipient TEXT NOT NULL,
                         status TEXT NOT NULL,
                         role TEXT NOT NULL,
-                        created_at INTEGER NOT NULL
+                        created_at INTEGER NOT NULL,
+                        uuid TEXT UNIQUE
                     )
                 """)
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_transactions_user ON transactions(user_id)")
+                
+                # Миграция: добавляем колонку uuid если её нет
+                try:
+                    cur.execute("ALTER TABLE transactions ADD COLUMN uuid TEXT UNIQUE")
+                    logger.info("Добавлена колонка uuid в таблицу transactions")
+                except sqlite3.OperationalError:
+                    # Колонка уже существует
+                    pass
+                
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_transactions_uuid ON transactions(uuid)")
                 conn.commit()
         except Exception as e:
             logger.error(f"Ошибка инициализации БД: {e}")

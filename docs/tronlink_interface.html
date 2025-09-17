@@ -236,7 +236,9 @@
                     if (transactionData.parameters) {
                         console.log('🔍 DEBUG: Recipient:', transactionData.parameters.recipient);
                         console.log('🔍 DEBUG: Amount:', transactionData.parameters.amount);
-                        console.log('🔍 DEBUG: Deadline:', transactionData.parameters.deadline);
+                        console.log('🔍 DEBUG: Parameters count:', Object.keys(transactionData.parameters).length);
+                        console.log('🔍 DEBUG: All parameter keys:', Object.keys(transactionData.parameters));
+                        // Deadline убран - теперь фиксированные 24 часа в контракте
                     }
                     
                     displayTransactionDetails();
@@ -290,14 +292,13 @@
                         </div>
                     `;
                 }
-                if (transactionData.parameters.deadline) {
-                    detailsHTML += `
-                        <div class="info-row">
-                            <span class="info-label">Deadline:</span>
-                            <span class="info-value">${new Date(transactionData.parameters.deadline * 1000).toLocaleString()}</span>
-                        </div>
-                    `;
-                }
+                // Deadline убран - теперь фиксированные 24 часа в контракте
+                detailsHTML += `
+                    <div class="info-row">
+                        <span class="info-label">Platform Fee:</span>
+                        <span class="info-value">5 USDT</span>
+                    </div>
+                `;
                 if (transactionData.parameters.transactionId !== undefined) {
                     detailsHTML += `
                         <div class="info-row">
@@ -348,7 +349,7 @@
 
                 if (transactionData.type === 'escrow_create') {
                     console.log('🔍 DEBUG: Entering escrow_create branch');
-                    // Create escrow transaction with new 3-parameter signature
+                    // Create escrow transaction with new 2-parameter signature (OptimizedTronEscrow)
                     const contract = await tronWeb.contract().at(transactionData.contract);
                     
                     // Step 1: USDT Approve (ALWAYS required)
@@ -407,12 +408,12 @@
                     console.log('🔍 DEBUG: - Contract address:', transactionData.contract);
                     console.log('🔍 DEBUG: - Recipient (raw):', transactionData.parameters.recipient);
                     console.log('🔍 DEBUG: - Amount (raw):', transactionData.parameters.amount);
-                    console.log('🔍 DEBUG: - Deadline (raw):', transactionData.parameters.deadline);
                     console.log('🔍 DEBUG: - Recipient type:', typeof transactionData.parameters.recipient);
                     console.log('🔍 DEBUG: - Amount type:', typeof transactionData.parameters.amount);
-                    console.log('🔍 DEBUG: - Deadline type:', typeof transactionData.parameters.deadline);
                     console.log('🔍 DEBUG: - Recipient length:', transactionData.parameters.recipient ? transactionData.parameters.recipient.length : 'undefined');
                     console.log('🔍 DEBUG: - Is recipient empty?:', !transactionData.parameters.recipient || transactionData.parameters.recipient.trim() === '');
+                    console.log('🔍 DEBUG: - IMPORTANT: Only 2 parameters will be passed (recipient, amount)');
+                    console.log('🔍 DEBUG: - NOTE: Deadline is fixed 24 hours in the smart contract itself');
                     
                     // Convert recipient address to hex format for TronWeb
                     console.log('🔍 DEBUG: Converting recipient address to hex...');
@@ -420,11 +421,18 @@
                     console.log('🔍 DEBUG: - Base58 address:', transactionData.parameters.recipient);
                     console.log('🔍 DEBUG: - Hex address:', recipientHex);
                     
-                    // Create transaction with timeout protection
+                    // Final parameters check
+                    console.log('🔍 DEBUG: FINAL PARAMETERS TO CONTRACT:');
+                    console.log('🔍 DEBUG: [0] recipientHex:', recipientHex);
+                    console.log('🔍 DEBUG: [1] amount:', transactionData.parameters.amount);
+                    console.log('🔍 DEBUG: Total parameters count: 2 (deadline removed)');
+                    
+                    // Create transaction with timeout protection (NEW CONTRACT - 2 parameters only)
+                    console.log('🔍 DEBUG: Calling contract.createTransaction with 2 parameters...');
                     const createTxPromise = contract.createTransaction(
-                        recipientHex,  // Use hex format
-                        transactionData.parameters.amount,
-                        transactionData.parameters.deadline
+                        recipientHex,  // [0] recipient (hex format)
+                        transactionData.parameters.amount  // [1] amount (micro USDT)
+                        // [2] deadline REMOVED - now fixed 24 hours in contract
                     ).send({
                         feeLimit: 100000000,
                         callValue: 0,
@@ -554,8 +562,32 @@
                 }, 1000);
 
             } catch (error) {
-                updateStatus(`❌ Transaction failed: ${error.message}`, 'error');
-                console.error('Transaction error:', error);
+                // 🔍 DETAILED ERROR LOGGING
+                console.error('❌ TRANSACTION ERROR - FULL DETAILS:');
+                console.error('❌ Error message:', error.message);
+                console.error('❌ Error stack:', error.stack);
+                console.error('❌ Error object:', error);
+                console.error('❌ Transaction data that caused error:', JSON.stringify(transactionData, null, 2));
+                
+                let errorMessage = error.message;
+                
+                // Special handling for parameter mismatch errors
+                if (error.message && error.message.includes('too many arguments')) {
+                    console.error('❌ PARAMETER MISMATCH DETECTED!');
+                    console.error('❌ The smart contract is expecting fewer parameters than we are sending.');
+                    console.error('❌ Our parameters:', transactionData.parameters);
+                    console.error('❌ Parameter count:', Object.keys(transactionData.parameters || {}).length);
+                    
+                    errorMessage = `Parameter mismatch: Contract expects fewer arguments. Check contract ABI. Details: ${error.message}`;
+                }
+                
+                if (error.message && error.message.includes('types/values length mismatch')) {
+                    console.error('❌ PARAMETER COUNT MISMATCH DETECTED!');
+                    console.error('❌ Contract expects different number of parameters.');
+                    errorMessage = `Parameter count mismatch: ${error.message}`;
+                }
+                
+                updateStatus(`❌ Transaction failed: ${errorMessage}`, 'error');
                 
                 // Re-enable button on error
                 executeBtn.disabled = false;

@@ -728,20 +728,20 @@ class UnifiedCryptoBot:
         data['amount'] = amount
         data['usdt_amount'] = usdt_amount
         
-        # Формируем данные для TronLink (только 3 параметра для смарт-контракта)
+        # Формируем данные для TronLink (только 2 параметра - deadline теперь фиксированный в контракте)
         transaction_data = {
             "type": "escrow_create",
             "contract": self.config.ESCROW_CONTRACT,
             "parameters": {
                 "recipient": data['recipient'],
-                "amount": usdt_amount,
-                "deadline": int(time.time()) + 48*3600  # 48 часов
+                "amount": usdt_amount
+                # deadline убран - теперь фиксированные 24 часа в контракте
             },
             "usdt_contract": self.config.USDT_CONTRACT,
             "usdt_amount": usdt_amount,
             "network": self.config.NETWORK,
             "display_info": {
-                "arbitrator": self.config.ARBITRATOR_ADDRESS,
+                "arbitrator": "Владелец контракта (автоматически)",
                 "description": f"Escrow сделка {amount} USDT"
             }
         }
@@ -784,7 +784,9 @@ class UnifiedCryptoBot:
             "✅ **Escrow сделка готова!**\n\n"
             f"🆔 ID: `{transaction_id}`\n"
             f"📨 Получатель: `{data['recipient']}`\n"
-            f"💰 Сумма: {amount} USDT\n\n"
+            f"💰 Сумма: {amount} USDT\n"
+            f"⏰ Дедлайн: 24 часа (фиксированно)\n"
+            f"💵 Комиссия: 5 USDT\n\n"
             "📋 **Дальше:**\n"
             "1. Нажмите 'Подписать через TronLink'\n"
             "2. Откроется браузер с интерфейсом\n"

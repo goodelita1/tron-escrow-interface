@@ -459,7 +459,22 @@ class TronEscrowUSDTClient:
         Получение информации о транзакции
         """
         try:
+            # Сначала проверяем, существует ли транзакция
+            tx_count = self.get_transaction_count()
+            if tx_count is None:
+                print(f"Ошибка получения количества транзакций")
+                return None
+                
+            if transaction_id < 0 or transaction_id >= tx_count:
+                print(f"Транзакция с ID {transaction_id} не существует (всего транзакций: {tx_count})")
+                return None
+            
             result = self.escrow_contract.functions.getTransaction(transaction_id)
+            
+            # Дополнительная проверка: если created_at = 0, это означает что транзакция не была создана
+            if result[4] == 0:  # created_at
+                print(f"Транзакция с ID {transaction_id} не была создана (created_at = 0)")
+                return None
             
             # Состояния транзакций
             states = {

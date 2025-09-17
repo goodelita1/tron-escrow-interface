@@ -10,7 +10,7 @@ import json
 import uuid
 import sys
 from datetime import datetime, timedelta
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 from dotenv import load_dotenv
@@ -188,6 +188,52 @@ class UnifiedCryptoBot:
                 conn.commit()
         except Exception as e:
             logger.error(f"Ошибка сохранения пользователя в БД: {e}")
+    
+    def db_add_transaction(self, user_id: str, tx_id: int, amount_usdt: float, recipient: str, role: str, status: str, created_at: int, uuid: str = None):
+        """Добавление транзакции в БД с UUID"""
+        try:
+            with self.get_db_conn() as conn:
+                cur = conn.cursor()
+                cur.execute("""
+                    INSERT OR REPLACE INTO transactions (id, user_id, amount_usdt, recipient, status, role, created_at, uuid)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (tx_id, user_id, amount_usdt, recipient, status, role, created_at, uuid))
+                conn.commit()
+                logger.info(f"Транзакция добавлена в БД: blockchain_id={tx_id}, uuid={uuid}")
+        except Exception as e:
+            logger.error(f"Ошибка добавления транзакции в БД: {e}")
+    
+    def db_get_transaction_by_uuid(self, uuid: str):
+        """Получение транзакции по UUID"""
+        try:
+            with self.get_db_conn() as conn:
+                cur = conn.cursor()
+                cur.execute("""
+                    SELECT id, user_id, amount_usdt, recipient, status, role, created_at, uuid 
+                    FROM transactions WHERE uuid = ?
+                """, (uuid,))
+                result = cur.fetchone()
+                if result:
+                    logger.info(f"Найдена транзакция по UUID {uuid}: blockchain_id={result[0]}")
+                else:
+                    logger.info(f"Транзакция с UUID {uuid} не найдена в БД")
+                return result
+        except Exception as e:
+            logger.error(f"Ошибка поиска транзакции по UUID: {e}")
+            return None
+    
+    def db_update_transaction_mapping(self, uuid: str, blockchain_id: int):
+        """Обновление связи UUID -> blockchain_id"""
+        try:
+            with self.get_db_conn() as conn:
+                cur = conn.cursor()
+                cur.execute("""
+                    UPDATE transactions SET id = ? WHERE uuid = ?
+                """, (blockchain_id, uuid))
+                conn.commit()
+                logger.info(f"Обновлена связь: UUID {uuid} -> blockchain_id {blockchain_id}")
+        except Exception as e:
+            logger.error(f"Ошибка обновления связи: {e}")
 
     # ================== ГЛАВНОЕ МЕНЮ ==================
     async def start_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -235,6 +281,7 @@ class UnifiedCryptoBot:
         """Меню эскроу функций"""
         keyboard = [
             [InlineKeyboardButton("🆕 Создать сделку", callback_data='create_escrow')],
+            [InlineKeyboardButton("✅ Подтвердить сделку", callback_data='confirm_escrow')],
             [InlineKeyboardButton("📋 Мои сделки", callback_data='my_transactions')],
             [InlineKeyboardButton("🔍 Статус сделки", callback_data='check_transaction')],
             [InlineKeyboardButton("⬅️ Назад", callback_data='back_to_main')]
@@ -557,32 +604,387 @@ class UnifiedCryptoBot:
 
     # ================== ПРОСТЫЕ ЭСКРОУ ФУНКЦИИ (из оригинала) ==================
     async def create_escrow_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Создание новой эскроу сделки"""
+        """Начало создания новой эскроу сделки"""
         query = update.callback_query
         await query.answer()
         
+        user_id = str(update.effective_user.id)
         transaction_id = str(uuid.uuid4())
         
+        # Сохраняем состояние пользователя
+        self.user_states[user_id] = {
+            'state': 'waiting_recipient',
+            'transaction_id': transaction_id,
+            'data': {}
+        }
+        
+        # Сохраняем UUID в pending_transactions для отслеживания
+        self.pending_transactions[transaction_id] = {
+            'user_id': user_id,
+            'created_at': int(time.time()),
+            'status': 'creating',
+            'data': {}
+        }
+        self.save_pending_transactions()
+        
+        keyboard = [[InlineKeyboardButton("⬅️ Отмена", callback_data='escrow_menu')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        text = (
+            "🆕 **Создание Escrow сделки**\n\n"
+            f"🆔 ID: `{transaction_id}`\n\n"
+            "📨 **Шаг 1/2: Адрес получателя**\n\n"
+            "Введите TRON адрес получателя USDT:\n"
+            "(Например: TJtq3AVtNTngU23HFinp22rh6Ufcy78Ce4)"
+        )
+        
+        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
+
+    async def handle_text_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Обработка текстового ввода пользователя"""
+        user_id = str(update.effective_user.id)
+        
+        if user_id not in self.user_states:
+            return  # Пользователь не в процессе создания сделки
+        
+        user_state = self.user_states[user_id]
+        text = update.message.text.strip()
+        
+        if user_state['state'] == 'waiting_recipient':
+            await self.handle_recipient_input(update, context, text)
+        elif user_state['state'] == 'waiting_amount':
+            await self.handle_amount_input(update, context, text)
+        elif user_state['state'] == 'waiting_transaction_id':
+            await self.handle_transaction_id_input(update, context, text)
+    
+    async def handle_recipient_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE, recipient_address: str):
+        """Обработка ввода адреса получателя"""
+        user_id = str(update.effective_user.id)
+        
+        # Проверяем формат TRON адреса
+        if not recipient_address.startswith('T') or len(recipient_address) != 34:
+            await update.message.reply_text(
+                "⚠️ **Некорректный адрес!**\n\n"
+                "TRON адрес должен:\n"
+                "• Начинаться с 'T'\n"
+                "• Содержать 34 символа\n\n"
+                "Повторите попытку:",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
+        
+        # Сохраняем адрес и переходим к следующему шагу
+        self.user_states[user_id]['data']['recipient'] = recipient_address
+        self.user_states[user_id]['state'] = 'waiting_amount'
+        
+        keyboard = [[InlineKeyboardButton("⬅️ Отмена", callback_data='escrow_menu')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            f"✅ Адрес принят: `{recipient_address}`\n\n"
+            "💰 **Шаг 2/2: Сумма**\n\n"
+            "Введите сумму USDT:\n"
+            "Например: 10 или 10.5",
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN
+        )
+    
+    async def handle_amount_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE, amount_text: str):
+        """Обработка ввода суммы"""
+        user_id = str(update.effective_user.id)
+        
+        try:
+            amount = float(amount_text)
+            if amount <= 0 or amount > 10000:
+                raise ValueError("Некорректная сумма")
+        except ValueError:
+            await update.message.reply_text(
+                "⚠️ **Некорректная сумма!**\n\n"
+                "Введите положительное число от 0.1 до 10000 USDT\n"
+                "Повторите попытку:",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
+        
+        # Преобразуем в микро-единицы USDT (6 десятичных знаков)
+        usdt_amount = int(amount * 1000000)
+        
+        # Сохраняем данные и сразу создаем финальную ссылку
+        user_state = self.user_states[user_id]
+        transaction_id = user_state['transaction_id']
+        data = user_state['data']
+        data['amount'] = amount
+        data['usdt_amount'] = usdt_amount
+        
+        # Формируем данные для TronLink (только 3 параметра для смарт-контракта)
+        transaction_data = {
+            "type": "escrow_create",
+            "contract": self.config.ESCROW_CONTRACT,
+            "parameters": {
+                "recipient": data['recipient'],
+                "amount": usdt_amount,
+                "deadline": int(time.time()) + 48*3600  # 48 часов
+            },
+            "usdt_contract": self.config.USDT_CONTRACT,
+            "usdt_amount": usdt_amount,
+            "network": self.config.NETWORK,
+            "display_info": {
+                "arbitrator": self.config.ARBITRATOR_ADDRESS,
+                "description": f"Escrow сделка {amount} USDT"
+            }
+        }
+        
+        # Отладочный вывод
+        logger.info(f"Transaction data: {json.dumps(transaction_data, indent=2)}")
+        
+        # Кодируем данные
+        encoded_data = base64.b64encode(json.dumps(transaction_data).encode()).decode()
+        # Добавляем timestamp для обхода кеша браузера
+        cache_buster = int(time.time())
+        tronlink_url = f"{self.config.WEB_APP_URL}?data={encoded_data}&v={cache_buster}"
+        
+        logger.info(f"Generated URL length: {len(tronlink_url)}")
+        logger.info(f"URL: {tronlink_url[:200]}...")
+        
+        # Обновляем pending_transactions с полными данными
+        if transaction_id in self.pending_transactions:
+            self.pending_transactions[transaction_id].update({
+                'status': 'pending_signature',
+                'data': {
+                    'recipient': data['recipient'],
+                    'amount': amount
+                }
+            })
+            self.save_pending_transactions()
+            logger.info(f"Обновлен UUID {transaction_id} в pending_transactions")
+        
+        # Очищаем состояние пользователя
+        del self.user_states[user_id]
+        
         keyboard = [
-            [InlineKeyboardButton("💳 Подписать через TronLink", 
-                                web_app=WebAppInfo(url=self.config.WEB_APP_URL))],
+            [InlineKeyboardButton("💳 Подписать через TronLink", url=tronlink_url)],
             [InlineKeyboardButton("📝 Проверить статус", callback_data=f'check_tx_status_{transaction_id}')],
             [InlineKeyboardButton("⬅️ Назад", callback_data='escrow_menu')]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        text = (
-            "🆕 **Создание новой сделки**\n\n"
-            f"🆔 ID сделки: `{transaction_id}`\n\n"
-            "📋 Инструкции:\n"
+        summary_text = (
+            "✅ **Escrow сделка готова!**\n\n"
+            f"🆔 ID: `{transaction_id}`\n"
+            f"📨 Получатель: `{data['recipient']}`\n"
+            f"💰 Сумма: {amount} USDT\n\n"
+            "📋 **Дальше:**\n"
             "1. Нажмите 'Подписать через TronLink'\n"
-            "2. В открывшемся окне введите данные сделки\n"
-            "3. Подпишите транзакцию в TronLink\n"
-            "4. Проверьте статус сделки\n\n"
-            "⚠️ Убедитесь что у вас установлен TronLink!"
+            "2. Откроется браузер с интерфейсом\n"
+            "3. Подтвердите транзакцию в TronLink\n\n"
+            "⚠️ Убедитесь, что TronLink установлен и разблокирован!"
         )
         
-        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(summary_text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
+    
+    async def handle_transaction_id_input(self, update: Update, context: ContextTypes.DEFAULT_TYPE, transaction_id: str):
+        """Обработка ввода transaction ID (поддерживает UUID и blockchain ID)"""
+        user_id = str(update.effective_user.id)
+        input_id = transaction_id.strip()
+        
+        # Определяем тип ввода: UUID или blockchain ID
+        tx_id = None
+        is_uuid = False
+        
+        # Проверяем, является ли это UUID (содержит тире и буквы)
+        if '-' in input_id and len(input_id) > 10:
+            # Это похоже на UUID - ищем в базе данных
+            db_transaction = self.db_get_transaction_by_uuid(input_id)
+            if db_transaction:
+                tx_id = db_transaction[0]  # blockchain_id из БД
+                is_uuid = True
+                logger.info(f"Найден UUID {input_id} -> blockchain_id {tx_id} в БД")
+            else:
+                # UUID не найден - показываем ошибку
+                keyboard = [
+                    [InlineKeyboardButton("🔄 Попробовать снова", callback_data='confirm_escrow')],
+                    [InlineKeyboardButton("🏠 Главная", callback_data='back_to_main')]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                await update.message.reply_text(
+                    f"❌ UUID сделки не найден!\n\n"
+                    f"🆔 Сделка с UUID {input_id} не найдена в базе данных.\n\n"
+                    "🔍 Проверьте правильность UUID и попробуйте снова.",
+                    reply_markup=reply_markup
+                )
+                return
+        else:
+            # Проверяем формат blockchain ID (целое число)
+            try:
+                tx_id = int(input_id)
+                if tx_id < 0:
+                    raise ValueError("Отрицательный ID")
+                logger.info(f"Введен blockchain_id: {tx_id}")
+            except ValueError:
+                keyboard = [
+                    [InlineKeyboardButton("🔄 Попробовать снова", callback_data='confirm_escrow')],
+                    [InlineKeyboardButton("🏠 Главная", callback_data='back_to_main')]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                await update.message.reply_text(
+                    "⚠️ **Некорректный ID!**\n\n"
+                    "Введите один из вариантов:\n\n"
+                    "• **UUID сделки** (из сообщения бота)\n"
+                    "например: `d9f4d52e-7a4e-4f66-b70c-fae4bd787720`\n\n"
+                    "• **Blockchain ID** (число)\n"
+                    "например: `3`\n\n"
+                    "🔄 Попробуйте снова!",
+                    parse_mode=ParseMode.MARKDOWN,
+                    reply_markup=reply_markup
+                )
+                return
+        
+        # НОВАЯ ПРОВЕРКА: Проверяем существование сделки в блокчейне
+        try:
+            temp_client = TronEscrowUSDTClient(
+                private_key="0000000000000000000000000000000000000000000000000000000000000001",  # Dummy key для чтения
+                contract_address=self.config.ESCROW_CONTRACT,
+                network=self.config.NETWORK
+            )
+            
+            tx_info = temp_client.get_transaction(tx_id)
+            
+            if not tx_info:
+                keyboard = [
+                    [InlineKeyboardButton("🔄 Попробовать снова", callback_data='confirm_escrow')],
+                    [InlineKeyboardButton("🏠 Главная", callback_data='back_to_main')]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                await update.message.reply_text(
+                    f"❌ **Сделка не найдена!**\n\n"
+                    f"🆔 Сделка с ID {tx_id} не существует в блокчейне.\n\n"
+                    "🔍 Проверьте правильность ID и попробуйте снова.",
+                    parse_mode=ParseMode.MARKDOWN,
+                    reply_markup=reply_markup
+                )
+                return
+            
+            # Проверяем статус сделки
+            if tx_info.get('state') != 'AWAITING_DELIVERY':
+                status_display = {
+                    'AWAITING_PAYMENT': '🔄 Ожидание оплаты',
+                    'COMPLETE': '✅ Уже завершена',
+                    'REFUNDED': '🔙 Возвращена',
+                    'DISPUTED': '⚠️ В споре'
+                }.get(tx_info.get('state'), '❓ Неизвестный')
+                
+                keyboard = [
+                    [InlineKeyboardButton("🔄 Попробовать снова", callback_data='confirm_escrow')],
+                    [InlineKeyboardButton("🏠 Главная", callback_data='back_to_main')]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                await update.message.reply_text(
+                    f"❌ **Нельзя подтвердить эту сделку!**\n\n"
+                    f"🆔 Сделка #{tx_id}\n"
+                    f"📊 Текущий статус: {status_display}\n\n"
+                    "📝 Подтвердить можно только сделки\n"
+                    "в статусе '⏳ Ожидание доставки'",
+                    parse_mode=ParseMode.MARKDOWN,
+                    reply_markup=reply_markup
+                )
+                return
+                
+        except Exception as e:
+            logger.error(f"Ошибка проверки сделки: {e}")
+            keyboard = [
+                [InlineKeyboardButton("🔄 Попробовать снова", callback_data='confirm_escrow')],
+                [InlineKeyboardButton("🏠 Главная", callback_data='back_to_main')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await update.message.reply_text(
+                f"❌ **Ошибка проверки сделки!**\n\n"
+                f"Детали: {str(e)}\n\n"
+                "Попробуйте снова или обратитесь к поддержке.",
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=reply_markup
+            )
+            return
+        
+        # Формируем данные для TronLink (тип confirm_delivery)
+        transaction_data = {
+            "type": "confirm_delivery",
+            "contract": self.config.ESCROW_CONTRACT,
+            "parameters": {
+                "transactionId": tx_id
+            },
+            "network": self.config.NETWORK,
+            "display_info": {
+                "arbitrator": self.config.ARBITRATOR_ADDRESS,
+                "description": f"Подтверждение сделки {tx_id}"
+            }
+        }
+        
+        # Отладочный вывод
+        logger.info(f"Confirm transaction data: {json.dumps(transaction_data, indent=2)}")
+        
+        # Кодируем данные
+        encoded_data = base64.b64encode(json.dumps(transaction_data).encode()).decode()
+        # Добавляем timestamp для обхода кеша браузера
+        cache_buster = int(time.time())
+        tronlink_url = f"{self.config.WEB_APP_URL}?data={encoded_data}&v={cache_buster}"
+        
+        logger.info(f"Generated confirm URL length: {len(tronlink_url)}")
+        logger.info(f"Confirm URL: {tronlink_url[:200]}...")
+        
+        # Получаем информацию о сделке из БД или блокчейна
+        amount_info = ""
+        recipient_info = ""
+        
+        # Если UUID был передан, ищем в БД
+        if is_uuid:
+            try:
+                db_transaction = self.db_get_transaction_by_uuid(input_id)
+                if db_transaction:
+                    amount_info = f"💰 Сумма: {db_transaction[2]} USDT\n"
+                    recipient_info = f"👤 Получатель: {db_transaction[3]}\n"
+            except:
+                pass
+        
+        # Если не нашли в БД, пытаемся получить из блокчейна
+        if not amount_info:
+            try:
+                blockchain_amount = tx_info.get('amount', 0) / 1000000
+                blockchain_recipient = tx_info.get('recipient', '')
+                if blockchain_amount > 0:
+                    amount_info = f"💰 Сумма: {blockchain_amount:.1f} USDT\n"
+                if blockchain_recipient:
+                    recipient_info = f"👤 Получатель: {blockchain_recipient}\n"
+            except:
+                pass
+        
+        # Очищаем состояние пользователя
+        del self.user_states[user_id]
+        
+        keyboard = [
+            [InlineKeyboardButton("✅ Подтвердить через TronLink", url=tronlink_url)],
+            [InlineKeyboardButton("⬅️ Назад", callback_data='escrow_menu')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        summary_text = (
+            "✅ **Ссылка подтверждения готова!**\n\n"
+            f"🔢 Transaction ID: `{tx_id}`\n"
+            f"{amount_info}"
+            f"{recipient_info}\n"
+            "📋 **Дальше:**\n"
+            "1. Нажмите 'Подтвердить через TronLink'\n"
+            "2. Откроется браузер с интерфейсом\n"
+            "3. Подтвердите транзакцию в TronLink\n\n"
+            "⚠️ **ВНИМАНИЕ:** Подтверждайте только \n"
+            "после получения товара/услуги!"
+        )
+        
+        await update.message.reply_text(summary_text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
 
     async def my_transactions_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Просмотр сделок пользователя"""
@@ -592,32 +994,100 @@ class UnifiedCryptoBot:
         user_id = str(update.effective_user.id)
         
         try:
+            # Получаем подтвержденные сделки из БД
             with self.get_db_conn() as conn:
                 cur = conn.cursor()
                 cur.execute("SELECT * FROM transactions WHERE user_id = ? ORDER BY created_at DESC LIMIT 10", (user_id,))
-                transactions = cur.fetchall()
-                
-            if not transactions:
-                text = "📋 У вас пока нет активных сделок."
+                confirmed_transactions = cur.fetchall()
+            
+            # Получаем ожидающие сделки
+            pending_transactions = []
+            for uuid, tx_data in self.pending_transactions.items():
+                if tx_data.get('user_id') == user_id:
+                    pending_transactions.append({
+                        'uuid': uuid,
+                        'status': tx_data.get('status', 'unknown'),
+                        'amount': tx_data.get('data', {}).get('amount', 0),
+                        'recipient': tx_data.get('data', {}).get('recipient', 'N/A'),
+                        'created_at': tx_data.get('created_at', 0)
+                    })
+            
+            # Сортируем по времени создания
+            pending_transactions.sort(key=lambda x: x['created_at'], reverse=True)
+            
+            if not confirmed_transactions and not pending_transactions:
+                text = "📋 У вас пока нет сделок."
             else:
-                text = "📋 **Ваши сделки:**\n\n"
-                for tx in transactions:
-                    tx_id, _, amount, recipient, status, role, created_at = tx
-                    created_date = datetime.fromtimestamp(created_at).strftime("%Y-%m-%d %H:%M")
-                    text += (
-                        f"🆔 ID: {tx_id}\n"
-                        f"💰 Сумма: {amount} USDT\n"
-                        f"👤 Получатель: {recipient[:10]}...\n"
-                        f"📊 Статус: {status}\n"
-                        f"🎭 Роль: {role}\n"
-                        f"📅 Создано: {created_date}\n\n"
-                    )
+                text = "📋 Ваши сделки:\n\n"
+                
+                # Показываем ожидающие сделки
+                if pending_transactions:
+                    text += "⏳ Ожидают подписания:\n"
+                    for pending in pending_transactions[:3]:  # Показываем последние 3
+                        created_date = datetime.fromtimestamp(pending['created_at']).strftime("%Y-%m-%d %H:%M")
+                        status_emoji = "🔄" if pending['status'] == 'pending_signature' else "🔧"
+                        text += (
+                            f"{status_emoji} UUID: {pending['uuid']}\n"
+                            f"💰 Сумма: {pending['amount']} USDT\n"
+                            f"👤 Получатель: {pending['recipient']}\n"
+                            f"📅 {created_date}\n\n"
+                        )
+                
+                # Показываем подтвержденные сделки
+                if confirmed_transactions:
+                    text += "✅ Подтвержденные в блокчейне:\n"
+                    for tx in confirmed_transactions[:5]:  # Показываем последние 5
+                        tx_id, _, amount, recipient, status, role, created_at, uuid_field = tx
+                        created_date = datetime.fromtimestamp(created_at).strftime("%Y-%m-%d %H:%M")
+                        if uuid_field:
+                            display_id = f"UUID: {uuid_field}"
+                        else:
+                            display_id = f"ID: {tx_id}"
+                        text += (
+                            f"✅ {display_id}\n"
+                            f"💰 Сумма: {amount} USDT\n"
+                            f"👤 Получатель: {recipient}\n"
+                            f"📄 Статус: {status}\n"
+                            f"📅 {created_date}\n\n"
+                        )
                     
         except Exception as e:
+            logger.error(f"Ошибка в my_transactions_handler: {e}")
             text = f"❌ Ошибка получения данных: {e}"
             
         keyboard = [[InlineKeyboardButton("⬅️ Назад", callback_data='escrow_menu')]]
         reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(text, reply_markup=reply_markup)
+
+    async def confirm_escrow_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Начало подтверждения эскроу сделки"""
+        query = update.callback_query
+        await query.answer()
+        
+        user_id = str(update.effective_user.id)
+        
+        # Сохраняем состояние пользователя
+        self.user_states[user_id] = {
+            'state': 'waiting_transaction_id',
+            'data': {}
+        }
+        
+        keyboard = [[InlineKeyboardButton("⬅️ Отмена", callback_data='escrow_menu')]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        text = (
+            "✅ **Подтверждение эскроу сделки**\n\n"
+            "📨 Введите ID сделки для подтверждения:\n\n"
+            "🆔 **UUID сделки** (из сообщения бота):\n"
+            "`f703898c-663c-4972-b03f-50c885d60e9e`\n\n"
+            "🔢 **Или Blockchain ID** (число):\n"
+            "`5`\n\n"
+            "ℹ️ **Когда подтверждать:**\n"
+            "• Когда вы получили товар/услугу\n"
+            "• Когда уверены в качестве\n"
+            "• После этого средства перейдут продавцу"
+        )
         
         await query.edit_message_text(text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
 
@@ -688,6 +1158,143 @@ class UnifiedCryptoBot:
         
         await query.edit_message_text(text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
 
+    async def check_tx_status_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Проверка статуса транзакции с автосинхронизацией"""
+        query = update.callback_query
+        await query.answer()
+        
+        # Извлекаем UUID из callback_data
+        tx_uuid = query.data.replace('check_tx_status_', '')
+        user_id = str(update.effective_user.id)
+        
+        logger.info(f"Проверка статуса UUID: {tx_uuid}")
+        
+        # Проверяем, есть ли UUID уже в БД
+        db_transaction = self.db_get_transaction_by_uuid(tx_uuid)
+        
+        if db_transaction:
+            # UUID уже связан с blockchain ID
+            blockchain_id = db_transaction[0]
+            status = db_transaction[4]
+            amount = db_transaction[2]
+            recipient = db_transaction[3]
+            
+            text = (
+                "✅ Сделка подтверждена в блокчейне!\n\n"
+                f"🆔 UUID: {tx_uuid}\n"
+                f"🔢 Blockchain ID: {blockchain_id}\n"
+                f"💰 Сумма: {amount} USDT\n"
+                f"📨 Получатель: {recipient}\n"
+                f"📊 Статус: {status}\n\n"
+                "🎉 Сделка готова к подтверждению!"
+            )
+            
+        elif tx_uuid in self.pending_transactions:
+            # UUID в pending - проверяем блокчейн
+            pending_data = self.pending_transactions[tx_uuid]
+            amount = pending_data.get('data', {}).get('amount', 0)
+            recipient = pending_data.get('data', {}).get('recipient', '')
+            
+            try:
+                # Создаем клиент для проверки блокчейна
+                temp_client = TronEscrowUSDTClient(
+                    private_key="0000000000000000000000000000000000000000000000000000000000000001",
+                    contract_address=self.config.ESCROW_CONTRACT,
+                    network=self.config.NETWORK
+                )
+                
+                # Получаем общее количество транзакций
+                total_transactions = temp_client.get_transaction_count()
+                
+                # Ищем среди последних 10 транзакций
+                found_blockchain_id = None
+                
+                for blockchain_id in range(total_transactions - 1, max(-1, total_transactions - 10), -1):
+                    try:
+                        tx_info = temp_client.get_transaction(blockchain_id)
+                        if not tx_info:
+                            continue
+                            
+                        blockchain_recipient = tx_info.get('recipient', '')
+                        tx_state = tx_info.get('state', '')
+                        
+                        # Проверяем совпадение по получателю и статусу AWAITING_DELIVERY
+                        if (blockchain_recipient.lower() == recipient.lower() and 
+                            tx_state == 'AWAITING_DELIVERY'):
+                            found_blockchain_id = blockchain_id
+                            break
+                            
+                    except Exception as e:
+                        logger.warning(f"Ошибка при проверке транзакции {blockchain_id}: {e}")
+                        continue
+                
+                if found_blockchain_id is not None:
+                    # Найдена в блокчейне - сохраняем в БД
+                    created_at = pending_data.get('created_at', int(time.time()))
+                    self.db_add_transaction(
+                        user_id=user_id,
+                        tx_id=found_blockchain_id,
+                        amount_usdt=amount,
+                        recipient=recipient,
+                        role='creator',
+                        status='AWAITING_DELIVERY',
+                        created_at=created_at,
+                        uuid=tx_uuid
+                    )
+                    
+                    # Удаляем из pending
+                    del self.pending_transactions[tx_uuid]
+                    self.save_pending_transactions()
+                    
+                    logger.info(f"✅ Автосинхронизация: UUID {tx_uuid} -> Blockchain ID {found_blockchain_id}")
+                    
+                    text = (
+                        "✅ Сделка найдена в блокчейне!\n\n"
+                        f"🆔 UUID: {tx_uuid}\n"
+                        f"🔢 Blockchain ID: {found_blockchain_id}\n"
+                        f"💰 Сумма: {amount} USDT\n"
+                        f"📨 Получатель: {recipient}\n"
+                        f"📊 Статус: AWAITING_DELIVERY\n\n"
+                        "🎉 Автоматически синхронизировано!\n"
+                        "✅ Сделка готова к подтверждению!"
+                    )
+                else:
+                    # Не найдена в блокчейне
+                    text = (
+                        "⏳ Сделка еще не подписана\n\n"
+                        f"🆔 UUID: {tx_uuid}\n"
+                        f"💰 Сумма: {amount} USDT\n"
+                        f"📨 Получатель: {recipient}\n"
+                        f"📊 Статус: pending_signature\n\n"
+                        "❗ Подпишите транзакцию через TronLink,\n"
+                        "а затем нажмите Проверить статус снова."
+                    )
+                    
+            except Exception as e:
+                logger.error(f"Ошибка проверки блокчейна: {e}")
+                text = (
+                    f"❌ Ошибка проверки блокчейна\n\n"
+                    f"🆔 UUID: {tx_uuid}\n"
+                    f"⚠️ Ошибка: {str(e)}\n\n"
+                    "🔄 Попробуйте позже."
+                )
+        else:
+            # UUID нигде не найден
+            text = (
+                f"❌ UUID не найден\n\n"
+                f"🆔 UUID: {tx_uuid}\n\n"
+                "⚠️ Данный UUID не найден ни в базе данных,\n"
+                "ни в ожидающих транзакциях."
+            )
+        
+        keyboard = [
+            [InlineKeyboardButton("🔄 Проверить снова", callback_data=f'check_tx_status_{tx_uuid}')],
+            [InlineKeyboardButton("⬅️ Назад к эскроу", callback_data='escrow_menu')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(text, reply_markup=reply_markup)
+
     # ================== CALLBACK QUERY ROUTER ==================
     async def callback_query_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Главный роутер callback запросов"""
@@ -704,17 +1311,23 @@ class UnifiedCryptoBot:
         elif data == 'help':
             await self.help_handler(update, context)
             
-        # Главные меню
-        elif data == 'escrow_menu':
-            await self.escrow_menu(update, context)
+        # Главные меню (обработка перенесена в эскроу секцию)
         elif data == 'crypto_menu':
             await self.crypto_menu(update, context)
             
         # Эскроу функции
         elif data == 'create_escrow':
             await self.create_escrow_handler(update, context)
+        elif data == 'confirm_escrow':
+            await self.confirm_escrow_handler(update, context)
         elif data == 'my_transactions':
             await self.my_transactions_handler(update, context)
+        elif data == 'escrow_menu':
+            # Очищаем состояние пользователя при возврате к меню
+            user_id = str(update.effective_user.id)
+            if user_id in self.user_states:
+                del self.user_states[user_id]
+            await self.escrow_menu(update, context)
             
         # Криптоаналитика - основные функции
         elif data == 'btc_dominance':
@@ -744,19 +1357,9 @@ class UnifiedCryptoBot:
         elif data.startswith('longshort_'):
             await self.longshort_coin_handler(update, context)
         
-        # Проверка статуса транзакции (упрощенно)
+        # Проверка статуса транзакции с автосинхронизацией
         elif data.startswith('check_tx_status_'):
-            await query.answer()
-            tx_id = data.replace('check_tx_status_', '')
-            text = (
-                f"🔍 **Проверка статуса сделки**\n\n"
-                f"🆔 ID: `{tx_id}`\n"
-                f"📊 Статус: В ожидании\n\n"
-                f"💡 Функция будет доступна после настройки TRON клиента."
-            )
-            keyboard = [[InlineKeyboardButton("⬅️ Назад к эскроу", callback_data='escrow_menu')]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await query.edit_message_text(text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
+            await self.check_tx_status_handler(update, context)
         
         else:
             await query.answer("❌ Неизвестная команда")
@@ -779,6 +1382,7 @@ def main():
         # Добавляем обработчики
         application.add_handler(CommandHandler("start", bot.start_command))
         application.add_handler(CallbackQueryHandler(bot.callback_query_handler))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_text_input))
         
         # Запускаем бота
         application.run_polling(allowed_updates=Update.ALL_TYPES)

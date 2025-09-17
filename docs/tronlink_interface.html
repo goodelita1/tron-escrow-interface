@@ -453,11 +453,43 @@
 
                 } else if (transactionData.type === 'confirm_delivery' || transactionData.type === 'escrow_confirm_delivery') {
                     console.log('🔍 DEBUG: Entering confirm_delivery branch');
+                    
+                    // 🔍 DEBUG: Log transaction details
+                    console.log('🔍 DEBUG: Transaction ID to confirm:', transactionData.parameters.transactionId);
+                    console.log('🔍 DEBUG: Current wallet address:', tronWeb.defaultAddress.base58);
+                    
                     // Confirm delivery (single step process)
                     updateStatus('🔄 Please confirm delivery confirmation in TronLink...', 'info');
                     const contract = await tronWeb.contract().at(transactionData.contract);
                     
+                    // 🔍 DEBUG: Check transaction details first
+                    try {
+                        const txInfo = await contract.getTransaction(transactionData.parameters.transactionId).call();
+                        console.log('🔍 DEBUG: Transaction info:', txInfo);
+                        console.log('🔍 DEBUG: Sender:', txInfo.sender);
+                        console.log('🔍 DEBUG: Recipient:', txInfo.recipient);
+                        console.log('🔍 DEBUG: State:', txInfo.state.toString());
+                        console.log('🔍 DEBUG: Amount:', txInfo.amount.toString());
+                        
+                        // Check if current user is the recipient
+                        const isRecipient = txInfo.recipient.toLowerCase() === tronWeb.defaultAddress.hex.toLowerCase();
+                        console.log('🔍 DEBUG: Is current user recipient?', isRecipient);
+                        
+                        if (!isRecipient) {
+                            throw new Error('Вы не являетесь получателем данной сделки');
+                        }
+                        
+                        if (txInfo.state.toString() !== '1') {  // AWAITING_DELIVERY = 1
+                            throw new Error(`Сделка в некорректном состоянии. Текущее состояние: ${txInfo.state}`);
+                        }
+                        
+                    } catch (error) {
+                        console.error('❌ DEBUG: Error getting transaction info:', error);
+                        throw new Error(`Ошибка получения информации о сделке: ${error.message}`);
+                    }
+                    
                     // Confirm delivery with timeout protection
+                    console.log('🔍 DEBUG: Calling confirmDelivery...');
                     const confirmPromise = contract.confirmDelivery(
                         transactionData.parameters.transactionId
                     ).send({
@@ -551,5 +583,5 @@
         });
     </script>
 </body>
-<!-- Cache buster: Updated 2025-09-17 08:31 -->
+<!-- Cache buster: Updated 2025-09-17 08:44 -->
 </html>

@@ -80,8 +80,25 @@ USDT_ABI = [
 
 class TronEscrowUSDTClient:
     """
-    Клиент для взаимодействия с USDT ESCROW смарт-контрактом на TRON
+    Оптимизированный клиент для взаимодействия с OptimizedTronEscrow смарт-контрактом на TRON
+    Поддерживает все функции с минимальным потреблением газа
     """
+    
+    # Константы состояний (соответствуют оптимизированному контракту)
+    STATE_AWAITING_DELIVERY = 0
+    STATE_COMPLETE = 1
+    STATE_DISPUTED = 2
+    STATE_REFUNDED = 3
+    
+    # Битовые флаги
+    FLAG_SENDER_APPROVED = 1
+    FLAG_RECIPIENT_APPROVED = 2
+    FLAG_ARBITRATOR_VOTED = 4
+    FLAG_ARBITRATOR_DECISION = 8
+    
+    # Константы оптимизированного контракта
+    PLATFORM_FEE = 5_000_000  # 5 USDT в микро-единицах
+    DEADLINE_HOURS = 24 * 3600  # 24 часа в секундах
     
     def __init__(self, 
                  private_key: str = None, 
@@ -249,18 +266,19 @@ class TronEscrowUSDTClient:
     
     def create_transaction(self, 
                           recipient_address: str, 
-                          amount_usdt: float, 
-                          deadline_hours: int) -> str:
+                          amount_usdt: float) -> str:
         """
-        Создание новой USDT ESCROW транзакции
+        Создание новой USDT ESCROW транзакции (Оптимизированный контракт)
         
         Args:
             recipient_address: Адрес получателя
             amount_usdt: Сумма в USDT
-            deadline_hours: Дедлайн в часах от текущего времени
             
         Returns:
             Transaction ID (hex)
+            
+        Note:
+            Дедлайн теперь фиксирован - 24 часа от создания в контракте
         """
         try:
             amount_units = self.usdt_to_units(amount_usdt)
@@ -283,15 +301,11 @@ class TronEscrowUSDTClient:
                 print("Сначала выполните approve_usdt()")
                 return None
             
-            # Дедлайн в timestamp
-            deadline = int(time.time()) + (deadline_hours * 3600)
-            
-            # Вызов функции контракта
+            # Вызов функции оптимизированного контракта (только 2 параметра)
             txn = (
                 self.escrow_contract.functions.createTransaction(
                     recipient_address,
-                    amount_units,  # Количество USDT
-                    deadline
+                    amount_units  # Количество USDT (без deadline - фиксирован 24ч)
                 )
                 .with_owner(self.address)
                 .fee_limit(100_000_000)
@@ -304,6 +318,7 @@ class TronEscrowUSDTClient:
             print(f"Общая сумма: {amount_usdt} USDT")
             print(f"К получателю после комиссии: {amount_usdt - 5.0} USDT")
             print(f"Комиссия платформы: 5.0 USDT")
+            print(f"Автоматический дедлайн: 24 часа от создания")
             return txn['txid']
             
         except Exception as e:
@@ -312,13 +327,19 @@ class TronEscrowUSDTClient:
     
     def create_transaction_with_auto_approve(self,
                                            recipient_address: str, 
-                                           amount_usdt: float, 
-                                           deadline_hours: int) -> Tuple[str, str]:
+                                           amount_usdt: float) -> Tuple[str, str]:
         """
-        Создание транзакции с автоматическим approve
+        Создание транзакции с автоматическим approve (Оптимизированный контракт)
         
+        Args:
+            recipient_address: Адрес получателя
+            amount_usdt: Сумма в USDT
+            
         Returns:
             Tuple[approve_txid, create_txid]
+            
+        Note:
+            Дедлайн фиксирован в контракте - 24 часа
         """
         try:
             # Сначала approve
@@ -332,10 +353,10 @@ class TronEscrowUSDTClient:
                 print("Approve не подтвердился")
                 return approve_txid, None
             
-            # Создаем транзакцию
+            # Создаем транзакцию (дедлайн теперь фиксированный 24ч в контракте)
             create_txid = self.create_transaction(
                 recipient_address, 
-                amount_usdt, deadline_hours
+                amount_usdt
             )
             
             return approve_txid, create_txid
@@ -456,7 +477,7 @@ class TronEscrowUSDTClient:
     
     def get_transaction(self, transaction_id: int) -> Dict[str, Any]:
         """
-        Получение информации о транзакции
+        Получение информации о транзакции (Оптимизированный контракт)
         """
         try:
             # Сначала проверяем, существует ли транзакция
@@ -469,21 +490,32 @@ class TronEscrowUSDTClient:
                 print(f"Транзакция с ID {transaction_id} не существует (всего транзакций: {tx_count})")
                 return None
             
+            # В новом контракте getTransaction возвращает:
+            # (sender, recipient, amount, state, createdAt, flags)
             result = self.escrow_contract.functions.getTransaction(transaction_id)
             
             # Дополнительная проверка: если created_at = 0, это означает что транзакция не была создана
-            if result[4] == 0:  # created_at
-                print(f"Транзакция с ID {transaction_id} не была создана (created_at = 0)")
+            if result[4] == 0:  # createdAt
+                print(f"Транзакция с ID {transaction_id} не была создана (createdAt = 0)")
                 return None
             
-            # Состояния транзакций
+            # Состояния транзакций в новом контракте
             states = {
-                0: "AWAITING_PAYMENT",
-                1: "AWAITING_DELIVERY", 
-                2: "COMPLETE",
-                3: "DISPUTED",
-                4: "REFUNDED"
+                0: "AWAITING_DELIVERY",  # AWAITING_DELIVERY
+                1: "COMPLETE",           # COMPLETE
+                2: "DISPUTED",           # DISPUTED  
+                3: "REFUNDED"            # REFUNDED
             }
+            
+            # Расшифровка флагов
+            flags = result[5]
+            sender_approved = bool(flags & 1)      # SENDER_APPROVED = 1
+            recipient_approved = bool(flags & 2)   # RECIPIENT_APPROVED = 2
+            arbitrator_voted = bool(flags & 4)     # ARBITRATOR_VOTED = 4
+            arbitrator_decision = bool(flags & 8)  # ARBITRATOR_DECISION = 8
+            
+            # Вычисляем дедлайн (createdAt + 24 часа)
+            deadline = result[4] + (24 * 60 * 60)  # 24 часа в секундах
             
             transaction_info = {
                 "sender": result[0],
@@ -492,11 +524,14 @@ class TronEscrowUSDTClient:
                 "amount_usdt": self.units_to_usdt(result[2]),
                 "state": states.get(result[3], "UNKNOWN"),
                 "created_at": result[4],
-                "deadline": result[5],
-                "sender_approved": result[6],
-                "recipient_approved": result[7],
+                "deadline": deadline,
+                "flags": flags,
+                "sender_approved": sender_approved,
+                "recipient_approved": recipient_approved,
+                "arbitrator_voted": arbitrator_voted,
+                "arbitrator_decision": arbitrator_decision,
                 "created_at_formatted": time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(result[4])),
-                "deadline_formatted": time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(result[5]))
+                "deadline_formatted": time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(deadline))
             }
             
             return transaction_info
@@ -507,10 +542,11 @@ class TronEscrowUSDTClient:
     
     def get_contract_usdt_balance(self) -> float:
         """
-        Получение баланса USDT контракта
+        Получение баланса USDT контракта (Оптимизированный контракт)
         """
         try:
-            balance_units = self.escrow_contract.functions.getContractUSDTBalance()
+            # В новом контракте баланс получаем напрямую через USDT токен
+            balance_units = self.usdt_contract.functions.balanceOf(self.escrow_contract.contract_address)
             return self.units_to_usdt(balance_units)
         except Exception as e:
             print(f"Ошибка получения USDT баланса контракта: {e}")
@@ -518,21 +554,23 @@ class TronEscrowUSDTClient:
     
     def get_usdt_token_address(self) -> str:
         """
-        Получение адреса USDT токена из контракта
+        Получение адреса USDT токена (Оптимизированный контракт)
         """
         try:
-            return self.escrow_contract.functions.getUSDTTokenAddress()
+            # В новом контракте USDT_TOKEN - это immutable переменная
+            return self.escrow_contract.functions.USDT_TOKEN()
         except Exception as e:
             print(f"Ошибка получения адреса USDT токена: {e}")
-            return None
+            return self.usdt_address  # Возвращаем из конфига
     
     def get_platform_fee_in_usdt(self) -> float:
         """
-        Получение текущей фиксированной комиссии в USDT
+        Получение фиксированной комиссии в USDT (Оптимизированный контракт)
         """
         try:
-            fee_usdt = self.escrow_contract.functions.getPlatformFeeInUSDT()
-            return float(fee_usdt)
+            # В новом контракте PLATFORM_FEE - это immutable переменная в units
+            fee_units = self.escrow_contract.functions.PLATFORM_FEE()
+            return self.units_to_usdt(fee_units)
         except Exception as e:
             print(f"Ошибка получения комиссии: {e}")
             return 5.0  # По умолчанию
@@ -601,8 +639,7 @@ def main():
         print("\n=== Создание USDT Escrow транзакции ===")
         approve_txid, create_txid = client.create_transaction_with_auto_approve(
             recipient_address=recipient,
-            amount_usdt=10.5,  # 10.5 USDT
-            deadline_hours=24  # 24 часа
+            amount_usdt=10.5  # 10.5 USDT (дедлайн фиксирован 24ч в контракте)
         )
         
         if create_txid and client.wait_for_transaction(create_txid):
